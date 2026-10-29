@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Лидерборд</title>
+<link rel="stylesheet" href="/static/style.css"></head>
+<body class="board">
+<h1>🏙️ Взломай умный город <span id="ph" class="badge"></span></h1>
+<div class="cols">
+ <section><h2>Лидерборд</h2><ol id="lb"></ol></section>
+ <section><h2>Лента событий</h2><ul id="feed" style="list-style:none;padding:0"></ul></section>
+</div>
+<section id="st" class="st"></section>
+<script>
+const $=s=>document.querySelector(s);
+const PH={hack:'Взлом',review:'Разбор',defend:'Защита',final:'Финал'};
+let OBJ=[],V={};
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function poll(){
+  const s=await (await fetch('/api/state')).json();
+  $('#ph').textContent=PH[s.phase];
+  $('#lb').innerHTML=s.board.slice(0,12).map(p=>`<li>${esc(p.nick)} <span class="sc">${p.score}</span><br><small class="muted">взломано ${p.hacked}, защищено ${p.defended}</small></li>`).join('');
+  $('#feed').innerHTML=s.feed.map(e=>`<li><small class="muted">${e.t}</small> ${esc(e.txt)}</li>`).join('');
+  $('#st').innerHTML=s.stats?OBJ.map(o=>{
+    const st=s.stats[o.id],c=st.counts,tot=Object.values(c).reduce((a,b)=>a+b,0);
+    if(!tot)return '';
+    const rows=Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([k,n])=>
+      `<div class="bar ${k==st.correct?'ok':''}"><i style="width:${Math.round(n/tot*160)}px"></i>${Math.round(n/tot*100)}% ${V[k]}</div>`).join('');
+    return `<div class="card" style="margin:0;max-width:none"><b>${o.emoji} ${o.title}</b>${rows}<small class="muted">Верно: ${V[st.correct]}</small></div>`;
+  }).join(''):'';
+}
+fetch('/api/objects').then(r=>r.json()).then(d=>{OBJ=d.objects;V=d.vulns;poll();setInterval(poll,1500)});
+</script></body></html>

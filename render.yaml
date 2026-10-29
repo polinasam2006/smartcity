@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: smartcity
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app --workers 1 --threads 8 --bind 0.0.0.0:$PORT
+    envVars:
+      - key: ADMIN_KEY
+        generateValue: true
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: smartcity-redis
+          property: connectionString
+
+  - type: keyvalue
+    name: smartcity-redis
+    plan: free
+    ipAllowList: []

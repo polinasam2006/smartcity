@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Взломай умный город</title>
+<link rel="stylesheet" href="/static/style.css"></head>
+<body>
+<header><b>🏙️ Взломай умный город</b><span id="me"></span><span id="ph" class="badge"></span></header>
+<div class="warn">Учебная симуляция. Реальный взлом инфраструктуры — уголовная ответственность.</div>
+<div id="join" class="card"><h2>Введи ник</h2>
+ <input id="nick" maxlength="16" placeholder="Ник для лидерборда">
+ <button onclick="join()">Начать игру</button><p id="err" class="err"></p></div>
+<main id="game" hidden><div id="map"></div>
+ <p class="muted">Нажимай на объекты. Взломал — назови уязвимость, это твой лог.</p></main>
+<div id="modal" hidden><div class="card" id="mbody"></div></div>
+<script>
+let pid=localStorage.pid,OBJ=[],V={},M={},ST={},cur=null,timer=null;
+const $=s=>document.querySelector(s);
+const api=(u,b)=>fetch(u,b?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid,...b})}:undefined).then(r=>r.json());
+const PH={hack:'Фаза: взлом',review:'Фаза: разбор',defend:'Фаза: защита',final:'Игра завершена'};
+
+async function join(){
+  const r=await api('/api/join',{nick:$('#nick').value});
+  if(r.error){$('#err').textContent=r.error;return}
+  pid=r.pid;localStorage.pid=pid;localStorage.nick=r.nick;start();
+}
+async function start(){
+  const d=await api('/api/objects');OBJ=d.objects;V=d.vulns;M=d.measures;
+  $('#join').hidden=true;$('#game').hidden=false;
+  await poll();clearInterval(timer);timer=setInterval(poll,2000);
+}
+async function poll(){
+  ST=await api('/api/state?pid='+pid);
+  if(!ST.me){localStorage.removeItem('pid');location.reload();return}
+  render();
+}
+function render(){
+  $('#me').textContent=localStorage.nick+': '+ST.me.score+' очк.';
+  $('#ph').textContent=PH[ST.phase];
+  $('#map').innerHTML=OBJ.map(o=>{
+    const h=ST.me.hacked[o.id],d=ST.me.defended[o.id];
+    const lock=o.requires?!o.requires.every(r=>ST.me.hacked[r]):(o.bonus&&!ST.unlocked);
+    const trapped=o.trap&&h;
+    return `<button class="obj ${trapped?'trap':d?'safe':h?'pwn':''} ${lock?'lock':''}" style="left:${o.x}%;top:${o.y}%" onclick="openObj('${o.id}')">${lock?'🔒':o.emoji}<small>${o.title}${!h&&ST.me.steps&&ST.me.steps[o.id]?' '+ST.me.steps[o.id]+'/'+o.n:''}</small></button>`;
+  }).join('');
+}
+function show(html){$('#mbody').innerHTML=html+'<button onclick="closeM()" style="margin-top:10px">Закрыть</button>';$('#modal').hidden=false}
+function closeM(){$('#modal').hidden=true}
+function opts(map,kind){return Object.entries(map).map(([k,v])=>`<button onclick="pick('${kind}','${k}')">${v}</button>`).join('')}
+
+async function openObj(id){
+  const o=OBJ.find(x=>x.id==id),h=ST.me?ST.me.hacked[id]:null,ph=ST.phase;cur=o;
+  if(o.deco){
+    const r=await api('/api/decoy',{obj:o.id});
+    if(r.hot)return show(`<h2>🚨 ${o.emoji} ${o.title}</h2><p>Это он! Кто-то прямо сейчас пытается проникнуть в систему через этот объект.</p><button onclick="stopSiren('${o.id}')">🛡️ Прервать мошенника</button>`);
+    const calm=ST.siren_active?'Здесь спокойно. Тревога где-то в другом месте — ищи дальше.':o.story;
+    return show(`<h2>${o.emoji} ${o.title}</h2><p>${calm}</p>`);
+  }
+  if(o.requires&&!o.requires.every(r=>ST.me.hacked[r]))
+    return show(`<h2>🔒 ${o.title}</h2><p>Нужно сначала взломать: ${o.requires.map(r=>OBJ.find(x=>x.id==r).title).join(', ')}.</p>`);
+  if(o.bonus&&!ST.unlocked)return show('<h2>🔒 Бонусный объект</h2><p>Сначала взломай все основные объекты.</p>');
+  if(ph=='review'||ph=='final')return show(`<h2>${o.emoji} ${o.title}</h2><p>Идёт разбор. Смотри на экран проектора.</p>`);
+  if(ph=='defend'){
+    if(o.trap)return show('<h2>🅿️ Это была ловушка</h2><p>Для ловушек нет защиты, только осторожность.</p>');
+    if(!h)return show(`<h2>${o.title}</h2><p>Этот объект ты не взламывал, защищать нечего.</p>`);
+    if(ST.me.defended[id])return show('<h2>🛡️ Объект защищён</h2>');
+    return show(`<h2>🛡️ Защити: ${o.title}</h2><p>Какая мера закрывает твою уязвимость?</p>`+opts(M,'defend'));
+  }
+  if(o.trap&&h)return show(trapMsg());
+  if(h&&h.vuln)return show(`<h2>✅ Взломано</h2><p>Твой лог: ${V[h.vuln]}</p>`);
+  if(h)return vulnPick();
+  task(o);
+}
+function trapMsg(){return '<h2>🍯 Это была ловушка</h2><p>Слишком лёгкая цель — повод насторожиться, а не радоваться. Настоящие службы безопасности расставляют такие приманки, чтобы засечь атакующего. −40 очков.</p>'}
+async function stopSiren(id){
+  const r=await api('/api/stop_siren',{obj:id});
+  await poll();
+  show(r.ok?'<h2>🛡️ Отлично!</h2><p>Ты успел первым и остановил проникновение. +100 очков.</p>'
+          :'<h2>Поздно</h2><p>Либо тревога уже снята кем-то другим, либо мошенник успел уйти.</p>');
+}
+async function task(o){
+  const r=await api('/api/obj',{obj:o.id});
+  if(r.error)return show(`<h2>${r.error}</h2>`);
+  cur.src=r.src;
+  let b=`<h2>${o.emoji} ${o.title}</h2><p class="muted">Шаг ${r.step+1} из ${r.total}</p><p>${o.story}</p>`+deviceUI(r.src)+`<p><b>${r.q}</b></p>`;
+  if(r.t=='replay')b+='<button onclick="capture()">📡 Перехватить сигнал</button><div id="cap"></div>';
+  else b+=`<input id="ans" maxlength="40" placeholder="${r.ph}"><button onclick="hack($('#ans').value)">Отправить</button>`;
+  show(b+'<p id="msg" class="err"></p>');
+}
+function deviceUI(src){
+  const k=Object.keys(src);if(!k.length)return '';
+  return '<div class="phone"><div id="scr" class="scr">Открой источник, чтобы изучить его.</div><div class="apps">'+k.map(n=>`<button onclick="app('${n}')">${n}</button>`).join('')+'</div></div>';
+}
+function app(k){$('#scr').innerHTML='<b>'+k+'</b><br>'+cur.src[k].map(l=>'• '+l).join('<br>')}
+async function capture(){
+  const r=await api('/api/capture',{obj:cur.id});
+  $('#cap').innerHTML=`<p>Перехвачено: <code>${r.token}</code></p><button onclick="hack('${r.token}')">🔁 Отправить сигнал повторно</button>`;
+}
+async function hack(a){
+  const r=await api('/api/hack',{obj:cur.id,answer:a});
+  if(r.error)return $('#msg').textContent=r.error;
+  if(!r.ok)return $('#msg').textContent='Не сработало. −5 очков';
+  await poll();
+  if(r.trap)return show(trapMsg());
+  if(r.done)return vulnPick();
+  await task(cur);$('#msg').className='okmsg';$('#msg').textContent='✓ Верно. Открылись новые источники.';
+}
+function vulnPick(){show('<h2>💥 Взлом удался</h2><p>Какая уязвимость сработала? Это запись в твой лог.</p>'+opts(V,'vuln'))}
+async function pick(kind,k){
+  const r=await api('/api/'+kind,{obj:cur.id,[kind=='vuln'?'vuln':'measure']:k});
+  await poll();
+  if(r.error)return show(`<h2>${r.error}</h2>`);
+  show(`<h2>${r.ok?'✅ Верно':'❌ Неверно'}</h2>${r.ok?'':'<p>Правильно: '+r.correct+'</p>'}`);
+}
+$('#nick').value=localStorage.nick||'';
+if(pid)start();
+</script></body></html>
